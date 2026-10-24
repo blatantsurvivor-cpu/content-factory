@@ -35,10 +35,12 @@ jobs:
               raise SystemExit("Missing ASI_ONE_API_KEY secret")
 
           params = urlencode({
-              "subreddit": "TrueOffMyChest",
-              "size": 50,
-              "sort": "desc",
-              "sort_type": "score"
+          "subreddit": "TrueOffMyChest",
+          "size": 50,
+          "sort": "desc",
+          "sort_type": "score",
+          "after": int(time.time()) - 7 * 24 * 60 * 60
+            })
           })
           url = "https://api.pullpush.io/reddit/search/submission/?" + params
 
