@@ -138,10 +138,12 @@ jobs:
           fi
           # Timestamped TTS normally avoids ASR; this remains the caption fallback.
           python -m pip install -r requirements-voice.txt
-          if [[ "$VOICE_ENGINE" == "elevenlabs" || ( "$VOICE_ENGINE" == "auto" && -n "$ELEVENLABS_API_KEY" && -n "$ELEVENLABS_VOICE_ID" ) ]]; then
-            echo "Selected expressive provider: ElevenLabs"
+          if [[ "$VOICE_ENGINE" == "elevenlabs" ]]; then
+            echo "Selected expressive provider: ElevenLabs (explicit; provider failures stop the job)"
+          elif [[ "$VOICE_ENGINE" == "auto" && -n "$ELEVENLABS_API_KEY" && -n "$ELEVENLABS_VOICE_ID" ]]; then
+            echo "Selected expressive provider: ElevenLabs; Kokoro will be installed only if automatic fallback is needed"
           else
-            echo "Selected local fallback: Kokoro"
+            echo "Selected local voice engine: Kokoro"
             python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
             python -m pip install -r requirements-kokoro.txt
           fi
