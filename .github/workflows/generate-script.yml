@@ -103,6 +103,25 @@ jobs:
             --write-media narration.mp3
           test -s narration.mp3
           echo "Voiceover generated successfully."
+      
+      - name: Render vertical video
+        run: |
+              sudo apt-get update
+              sudo apt-get install -y ffmpeg
+              curl -L "https://github.com/blatantsurvivor-cpu/content-factory/releases/download/v1.0/minecraft_test_1080p.mp4" -o gameplay.mp4
+
+              test -s narration.mp3
+              test -s gameplay.mp4
+
+              ffmpeg -y -stream_loop -1 -i gameplay.mp4 -i narration.mp3 \
+                -map 0:v:0 -map 1:a:0 \
+                -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" \
+                -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
+                -c:a aac -b:a 192k -shortest -movflags +faststart \
+                final_video.mp4
+
+              test -s final_video.mp4
+              echo "Video rendered successfully."
 
       - name: Save generated script
         uses: actions/upload-artifact@v4
