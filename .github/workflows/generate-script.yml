@@ -137,14 +137,37 @@ jobs:
           PY
       - name: Generate Kokoro voiceover
         run: |
-          python -m kokoro \
-            --voice am_adam \
-            --language a \
-            --input-file script.txt \
-            --output-file narration.wav
+          python - <<'PY'
+          import numpy as np
+          import soundfile as sf
+          from kokoro import KPipeline
+
+          text = open("script.txt", encoding="utf-8").read().strip()
+          if not text:
+              raise SystemExit("script.txt is empty")
+
+          pipeline = KPipeline(lang_code="a")
+          chunks = []
+
+          for _, _, audio in pipeline(
+              text,
+              voice="am_adam",
+              speed=1,
+              split_pattern=r"\n+"
+          ):
+              if audio is not None:
+                  if hasattr(audio, "cpu"):
+                      audio = audio.cpu().numpy()
+                  chunks.append(np.asarray(audio, dtype=np.float32).reshape(-1))
+
+          if not chunks:
+              raise SystemExit("Kokoro generated no audio")
+
+          sf.write("narration.wav", np.concatenate(chunks), 24000)
+          print("Kokoro voiceover generated successfully.")
+          PY
 
           test -s narration.wav
-          echo "Kokoro am_adam voiceover generated."
 
       - name: Download gameplay
         run: |
