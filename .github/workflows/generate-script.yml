@@ -45,12 +45,42 @@ jobs:
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
           python -m pip install "av==13.1.0" "faster-whisper==1.1.1" "kokoro>=0.9.4" numpy Pillow
 
-      - name: Download gameplay
+      - name: Download and prepare landscape gameplay
         run: |
-          curl -fL --retry 3 \
-            "https://github.com/blatantsurvivor-cpu/content-factory/releases/download/v1.0/minecraft_test_1080p.mp4" \
-            -o gameplay.mp4
+          set -euo pipefail
+          BASE="https://github.com/blatantsurvivor-cpu/content-factory/releases/download/v1.0"
+          mkdir -p gameplay_clips normalized_clips
+
+          # Preferred: upload gameplay.zip to the v1.0 release with multiple landscape clips.
+          # Fallback: keep using the existing single MP4 release asset.
+          if curl -fL --retry 2 "$BASE/gameplay.zip" -o gameplay.zip; then
+            unzip -oq gameplay.zip -d gameplay_clips
+            mapfile -t CLIPS < <(find gameplay_clips -type f \
+              \( -iname '*.mp4' -o -iname '*.mov' -o -iname '*.mkv' -o -iname '*.webm' \) | sort)
+            if [ "${#CLIPS[@]}" -eq 0 ]; then
+              echo "gameplay.zip contained no supported video files" >&2
+              exit 1
+            fi
+          else
+            curl -fL --retry 3 "$BASE/minecraft_test_1080p.mp4" -o gameplay.mp4
+            test -s gameplay.mp4
+            mapfile -t CLIPS < <(printf '%s\n' gameplay.mp4)
+          fi
+
+          : > clips.txt
+          i=0
+          for clip in "${CLIPS[@]}"; do
+            out="normalized_clips/clip_$(printf '%03d' "$i").mp4"
+            # Normalize mixed landscape sizes/codecs before concatenation; do not crop content.
+            ffmpeg -y -v error -i "$clip" -an \
+              -vf "scale=1920:1080:force_original_aspect_ratio=decrease:flags=lanczos,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p" \
+              -c:v libx264 -preset veryfast -crf 18 "$out"
+            printf "file '%s'\n" "$out" >> clips.txt
+            i=$((i + 1))
+          done
+          ffmpeg -y -v error -f concat -safe 0 -i clips.txt -c copy gameplay.mp4
           test -s gameplay.mp4
+          echo "Prepared $i landscape gameplay clip(s) into gameplay.mp4"
 
       # Optional: attach memes.zip (PNG/JPG files named like bruh.png, shocked.jpg) to the
       # same release and the script writer will be allowed to pick them. Safe to skip.
@@ -62,6 +92,27 @@ jobs:
             -o memes.zip
           unzip -qo -j memes.zip -d memes
           ls memes
+
+      # Optional real sound effects: whoosh.wav, boom.wav, ding.wav, pop.wav, riser.wav, buzz.wav.
+      # If absent, the workflow uses its built-in generated fallback sounds.
+      - name: Download sound pack (optional)
+        continue-on-error: true
+        run: |
+          if curl -fL --retry 2 \
+            "https://github.com/blatantsurvivor-cpu/content-factory/releases/download/v1.0/sfx.zip" \
+            -o sfx.zip; then
+            mkdir -p sfx_raw sfx
+            unzip -oq sfx.zip -d sfx_raw
+            for name in whoosh boom ding pop riser buzz; do
+              src="$(find sfx_raw -type f -iname "$name.wav" -print -quit)"
+              if [ -n "$src" ]; then
+                ffmpeg -y -v error -i "$src" -ar 24000 -ac 1 -c:a pcm_s16le "sfx/$name.wav"
+              fi
+            done
+            find sfx -type f -maxdepth 1 -print || true
+          else
+            echo "No sfx.zip found; built-in sound effects will be used."
+          fi
 
       - name: Fetch Reddit story and write beat-by-beat script
         env:
@@ -77,7 +128,7 @@ jobs:
           from html import unescape
           from html.parser import HTMLParser
 
-          EFFECTS = {"none", "zoom", "shake", "flash", "dark"}
+          EFFECTS = {"none", "shake", "flash", "dark"}
           SFX = {"none", "whoosh", "boom", "ding", "pop", "riser", "buzz"}
 
           sub = re.sub(r"[^A-Za-z0-9_]", "", os.environ.get("SUBREDDIT") or "") or "TrueOffMyChest"
@@ -240,17 +291,18 @@ jobs:
 
           # ---------- 3. LLM script ----------
           prompt = f"""
-          You are a short-form video writer. Turn this Reddit post into a 60-90 second
-          first-person narration with ORIGINAL commentary, and mark editing cues.
+          You are a sharp human short-form comedy storyteller and editor, not a generic
+          Reddit summarizer. Adapt this post into a 60-90 second narration that sounds
+          conversational, opinionated, surprising, and genuinely funny when the story allows.
 
           Return ONLY valid JSON (no markdown fences) shaped exactly like:
           {{
-            "yt_title": "catchy title under 70 chars, no all-caps",
+            "yt_title": "curiosity-driven title under 70 chars; no fake claims or all-caps",
             "hashtags": ["#shorts", "#reddit", "..."],
             "beats": [
               {{
                 "text": "one or two spoken sentences",
-                "effect": "none|zoom|shake|flash|dark",
+                "effect": "none|shake|flash|dark",
                 "sfx": "none|whoosh|boom|ding|pop|riser|buzz",
                 "sticker": "1-3 WORD REACTION IN CAPS" or null,
                 {meme_line},
@@ -259,17 +311,33 @@ jobs:
             ]
           }}
 
-          Rules:
-          - 11-16 beats, 170-230 spoken words total. Beat 1 is a strong hook.
-          - Write in your own words, do not copy the post. At least 3 beats must be the
-            narrator's own reaction or opinion to what happened (these are great spots for
-            zoom/shake/flash, a sticker, or a sound effect).
-          - Use cues sparingly: sfx on at most 6 beats, stickers on at most 4, quotes on at
-            most 3 (quotes must be exact text from the post, never invented).
-          - "dark" suits tense or sad moments, "flash" suits twists, "shake" suits shock.
-          - Spoken text only: no emojis, no stage directions, no hashtags, no title.
-          - General-audience language. Tone down anything graphic.
-          - End with a satisfying closing line or a question for the viewer.
+          COMEDIC STRUCTURE:
+          - 11-16 beats, 170-230 spoken words total. Beat 1 must hook in the first 1-2 seconds.
+          - Beat 1: the most absurd, awkward, outrageous, or curiosity-provoking detail.
+          - Beats 2-4: establish only the context needed to understand the situation.
+          - Middle: escalate with specific details, reversals, awkward consequences, or irony.
+          - Include 3-5 short narrator reactions/opinions that feel spontaneous and human.
+            Use dry sarcasm, disbelief, playful exaggeration, relatable observations, or a
+            witty comparison. Vary the joke style; do not force a joke into every sentence.
+          - Final beat: strongest punchline or a short, genuinely debatable viewer question.
+          - Prefer concrete jokes tied to details in the story over generic phrases like
+            "I was shook", "this is crazy", "bro what", or "you can't make this up".
+          - No repeated punchlines, filler, fake cliffhangers, fake quotes, or invented events.
+            Never change who did what or claim a detail that the post does not support.
+          - If the post is serious, upsetting, or about abuse/grief, use restrained empathy and
+            light irony only where appropriate; do not turn the victim into the joke.
+
+          EDITING CUES:
+          - Use cues with purpose, not randomly. sfx on at most 7 beats, stickers on at most 5,
+            quotes on at most 3. Leave breathing room; do not stack every cue at once.
+          - Use "boom" for a reveal/punchline, "ding" for a realization, "buzz" for a bad idea,
+            "riser" before a reveal, "whoosh" for a transition, and "pop" for a quick reaction.
+          - Use "shake" only for shock, "flash" for a sudden reveal, and "dark" for a tense beat.
+          - Meme choices must match the emotion/context of that exact beat. If none fits, use null.
+          - Stickers should be short reaction phrases, not summaries. Quotes must be exact text
+            copied from the original post, never invented or stitched together.
+          - Spoken text only: no emojis, stage directions, hashtags, or title in narration.
+          - General-audience language; tone down graphic details. Do not add a forced subscribe CTA.
 
           Reddit title: {title}
           Original post: {story[:9000]}
@@ -605,6 +673,29 @@ jobs:
               "buzz": (sfx_buzz(), 0.25),
           }
 
+          # Prefer real user-supplied sound effects when available; otherwise retain the fallback.
+          for name, (fallback_audio, gain) in list(SFX.items()):
+              path = f"sfx/{name}.wav"
+              if not os.path.isfile(path):
+                  continue
+              with wave.open(path, "rb") as w:
+                  channels, width, rate = w.getnchannels(), w.getsampwidth(), w.getframerate()
+                  raw = w.readframes(w.getnframes())
+              if width != 2:
+                  print(f"Skipping {path}: expected 16-bit PCM WAV")
+                  continue
+              sample = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+              if channels > 1:
+                  sample = sample.reshape(-1, channels).mean(axis=1)
+              if rate != SR and len(sample):
+                  old_t = np.arange(len(sample), dtype=np.float64) / rate
+                  new_len = max(1, round(len(sample) * SR / rate))
+                  new_t = np.arange(new_len, dtype=np.float64) / SR
+                  sample = np.interp(new_t, old_t, sample).astype(np.float32)
+              if len(sample):
+                  SFX[name] = (norm(sample), gain)
+                  print(f"Using real sound effect: {path}")
+
           # ------------------------------------------------------------------ cards
           def wrap(draw, text, font, max_w, max_lines=None):
               lines, line = [], ""
@@ -836,54 +927,43 @@ jobs:
           edges = [round(x["start"] * FPS) for x in shots] + [round(total * FPS)]
           for k, sh in enumerate(shots):
               sh["frames"] = max(2, edges[k + 1] - edges[k])
-          neutral = [s for s in shots if s["effect"] == "none"]
-          for k, sh in enumerate(neutral):  # gentle push-in on every other calm shot
-              if k % 2 == 1:
-                  sh["effect"] = "push"
           print(f"{len(shots)} shots")
 
 
           # ------------------------------------------------------------------ per-shot filter
-          def vf_for(sh, rx):
-              dur = sh["frames"] / FPS
-              base = (
-                  f"crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)':x='(iw-ow)*{rx:.3f}':y='(ih-oh)/2',"
-                  f"scale={W}:{H}:flags=lanczos"
-              )
+          # Keep the entire landscape frame visible. A blurred, darkened duplicate fills the
+          # portrait canvas; the sharp original is fitted inside it without cropping or zooming.
+          def filter_for(sh):
               fx = sh["effect"]
-              if fx == "zoom":  # punch-in
-                  z = "(1+0.16*min(t/0.25,1))"
-                  base += f",scale=w='{W}*{z}':h='{H}*{z}':eval=frame:flags=bilinear,crop={W}:{H}"
-              elif fx == "push":  # slow push
-                  z = f"(1+0.07*min(t/{dur:.3f},1))"
-                  base += f",scale=w='{W}*{z}':h='{H}*{z}':eval=frame:flags=bilinear,crop={W}:{H}"
-              elif fx == "shake":
-                  base += (
-                      f",scale=1168:2078:flags=bilinear,"
-                      f"crop={W}:{H}:x='(iw-ow)/2+16*sin(t*55)':y='(ih-oh)/2+16*cos(t*47)'"
+              graph = (
+                  f"[0:v]split=2[bg0][fg0];"
+                  f"[bg0]scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,"
+                  f"crop={W}:{H},boxblur=28:10,eq=brightness=-0.24:saturation=0.68[bg];"
+                  f"[fg0]scale={W}:{H}:force_original_aspect_ratio=decrease:flags=lanczos[fg];"
+                  f"[bg][fg]overlay=(W-w)/2:(H-h)/2:shortest=1,setsar=1"
+              )
+              if fx == "shake":
+                  graph += (
+                      f",scale=1100:1956:flags=bilinear,"
+                      f"crop={W}:{H}:x='(iw-ow)/2+7*sin(t*55)':y='(ih-oh)/2+7*cos(t*47)'"
                   )
               elif fx == "flash":
-                  base += ",fade=t=in:st=0:d=0.22:color=white"
+                  graph += ",drawbox=x=0:y=0:w=iw:h=ih:color=white@0.72:t=fill:enable='lt(t,0.10)'"
               elif fx == "dark":
-                  z = f"(1+0.05*min(t/{dur:.3f},1))"
-                  base += (
-                      f",eq=saturation=0.35:brightness=-0.10:contrast=1.08,"
-                      f"scale=w='{W}*{z}':h='{H}*{z}':eval=frame:flags=bilinear,crop={W}:{H}"
-                  )
-              return base + f",fps={FPS},format=yuv420p"
+                  graph += ",eq=saturation=0.55:brightness=-0.08:contrast=1.06"
+              return graph + f",fps={FPS},format=yuv420p[outv]"
 
 
           listing = []
           for k, sh in enumerate(shots):
               dur = sh["frames"] / FPS
               off = random.uniform(0, max(0.0, gp_dur - dur - 1))
-              rx = random.uniform(0.15, 0.85)
               out = f"shot_{k:03}.mp4"
               run(
                   [
                       "ffmpeg", "-y", "-v", "error",
                       "-stream_loop", "-1", "-ss", f"{off:.2f}", "-i", "gameplay.mp4",
-                      "-an", "-vf", vf_for(sh, rx),
+                      "-an", "-filter_complex", filter_for(sh), "-map", "[outv]",
                       "-frames:v", str(sh["frames"]),
                       "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p",
                       out,
