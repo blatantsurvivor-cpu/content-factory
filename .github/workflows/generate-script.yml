@@ -104,34 +104,20 @@ jobs:
           test -s narration.mp3
           echo "Voiceover generated successfully."
       
-      - name: Render vertical video
-        run: |
+      
+       - name: Render final video with subtitles
+         run: |
               sudo apt-get update
               sudo apt-get install -y ffmpeg
+              pip install edge-tts faster-whisper
+
               curl -L "https://github.com/blatantsurvivor-cpu/content-factory/releases/download/v1.0/minecraft_test_1080p.mp4" -o gameplay.mp4
-
-              test -s narration.mp3
-              test -s gameplay.mp4
-
-              ffmpeg -y -stream_loop -1 -i gameplay.mp4 -i narration.mp3 \
-                -map 0:v:0 -map 1:a:0 \
-                -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" \
-                -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
-                -c:a aac -b:a 192k -shortest -movflags +faststart \
-                final_video.mp4
-
-              test -s final_video.mp4
-              echo "Video rendered successfully."
-      
-       - name: Generate and burn subtitles
-         run: |
-              pip install faster-whisper
 
               python - <<'PY'
               from faster_whisper import WhisperModel
 
               model = WhisperModel("tiny", device="cpu", compute_type="int8")
-              segments, info = model.transcribe("narration.mp3")
+              segments, _ = model.transcribe("narration.mp3")
 
               def stamp(t):
                   ms = round(t * 1000)
@@ -145,21 +131,20 @@ jobs:
                       f.write(f"{i}\n{stamp(seg.start)} --> {stamp(seg.end)}\n{seg.text.strip()}\n\n")
               PY
 
-              ffmpeg -y -i final_video.mp4 \
-                -vf "subtitles=subtitles.srt:force_style='FontName=Arial,FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Alignment=2,MarginV=180'" \
-                -c:v libx264 -preset ultrafast -crf 23 \
-                -c:a copy -movflags +faststart \
-                subtitled_video.mp4
+              ffmpeg -y -stream_loop -1 -i gameplay.mp4 -i narration.mp3 \
+                -map 0:v:0 -map 1:a:0 \
+                -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,subtitles=subtitles.srt:force_style='FontName=Arial,FontSize=18,Outline=2,Alignment=2,MarginV=180'" \
+                -c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p \
+                -c:a aac -b:a 192k -shortest -movflags +faststart \
+                final_video.mp4
 
-              test -s subtitled_video.mp4
-              echo "Subtitled video created."
+              test -s final_video.mp4
+
 
       - name: Save generated script
         uses: actions/upload-artifact@v4
         with:
           name: generated-script
           path: |
-            script.txt
-            narration.mp3
             final_video.mp4
           retention-days: 7
