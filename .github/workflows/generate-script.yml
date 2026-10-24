@@ -17,8 +17,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-          python -m pip install edge-tts faster-whisper
-
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade "av>=14,<16" "faster-whisper==1.1.1" edge-tts
       - name: Fetch Reddit story and generate script
         env:
           ASI_ONE_API_KEY: ${{ secrets.ASI_ONE_API_KEY }}
