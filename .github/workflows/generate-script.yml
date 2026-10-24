@@ -1,0 +1,102 @@
+
+name: Generate Reddit Script
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Fetch Reddit story and generate script
+        env:
+          ASI_ONE_API_KEY: ${{ secrets.ASI_ONE_API_KEY }}
+        run: |
+          python - <<'PY'
+          import os, json, re, urllib.request, xml.etree.ElementTree as ET
+          from html import unescape
+
+          if not os.environ.get("ASI_ONE_API_KEY"):
+              raise SystemExit("Missing ASI_ONE_API_KEY repository secret")
+
+          feed_url = "https://www.reddit.com/r/TrueOffMyChest/.rss?sort=top&t=day"
+          req = urllib.request.Request(
+              feed_url,
+              headers={"User-Agent": "ContentFactory/1.0"}
+          )
+
+          with urllib.request.urlopen(req, timeout=20) as response:
+              root = ET.fromstring(response.read())
+
+          ns = {"atom": "http://www.w3.org/2005/Atom"}
+          entries = root.findall("atom:entry", ns)
+
+          if not entries:
+              raise SystemExit("No Reddit posts found in the RSS feed")
+
+          chosen = None
+          for entry in entries:
+              title = entry.findtext("atom:title", default="", namespaces=ns)
+              content = entry.findtext("atom:content", default="", namespaces=ns)
+              content = re.sub(r"<[^>]+>", " ", unescape(content))
+              content = re.sub(r"\s+", " ", content).strip()
+              if len(content) > 200:
+                  chosen = (title, content[:12000])
+                  break
+
+          if not chosen:
+              raise SystemExit("No suitable story found in today's feed")
+
+          title, story = chosen
+          prompt = f"""
+          Create an original 60-90 second first-person narration inspired by
+          the following Reddit post. Do not copy it verbatim or invent claims
+          that the source author definitely made. Make it engaging, coherent,
+          and suitable for a general audience. Output only the narration.
+
+          Post title: {title}
+          Post content: {story}
+          """
+
+          payload = json.dumps({
+              "model": "asi1",
+              "messages": [
+                  {"role": "user", "content": prompt}
+              ]
+          }).encode()
+
+          api_req = urllib.request.Request(
+              "https://api.asi1.ai/v1/chat/completions",
+              data=payload,
+              headers={
+                  "Authorization": "Bearer " + os.environ["ASI_ONE_API_KEY"],
+                  "Content-Type": "application/json"
+              },
+              method="POST"
+          )
+
+          with urllib.request.urlopen(api_req, timeout=90) as response:
+              result = json.loads(response.read())
+
+          script = result["choices"][0]["message"]["content"].strip()
+          if not script:
+              raise SystemExit("ASI:One returned an empty script")
+
+          with open("script.txt", "w", encoding="utf-8") as f:
+              f.write(script + "\n")
+
+          print("Generated script successfully.")
+          print("Word count:", len(script.split()))
+          PY
+
+      - name: Save generated script
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-script
+          path: script.txt
+          retention-days: 7
