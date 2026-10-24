@@ -47,7 +47,21 @@ jobs:
         with:
           python-version: "3.11"
       - name: Compile-check all workflow scripts
-        run: python -m py_compile scripts/*.py
+        run: |
+          python - <<'PYCODE'
+          from pathlib import Path
+          import py_compile
+
+          scripts_dir = Path("scripts")
+          if not scripts_dir.is_dir():
+              raise SystemExit("Missing scripts/ directory. Extract the complete Proto 2 bundle into the repository root.")
+          files = sorted(scripts_dir.glob("*.py"))
+          if not files:
+              raise SystemExit("No Python files found in scripts/. Do not upload only the workflow YAML.")
+          for script in files:
+              py_compile.compile(str(script), doraise=True)
+          print(f"Compiled {len(files)} Python scripts successfully")
+          PYCODE
       - name: Generate Reddit story and edited script
         env:
           ASI_ONE_API_KEY: ${{ secrets.ASI_ONE_API_KEY }}
