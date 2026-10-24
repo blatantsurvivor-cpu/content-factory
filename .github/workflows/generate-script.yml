@@ -20,63 +20,72 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "av>=14,<16" "faster-whisper==1.1.1" "kokoro>=0.9.4" soundfile Pillow
 
+      
       - name: Fetch Reddit story and generate script
         env:
           ASI_ONE_API_KEY: ${{ secrets.ASI_ONE_API_KEY }}
         run: |
           python - <<'PY'
-          import os, json, re, urllib.request, xml.etree.ElementTree as ET
-          from html import unescape
-          from html.parser import HTMLParser
-
-          class TextExtractor(HTMLParser):
-              def __init__(self):
-                  super().__init__()
-                  self.parts = []
-              def handle_data(self, data):
-                  self.parts.append(data)
+          import os, json, re, urllib.request, html
 
           key = os.environ.get("ASI_ONE_API_KEY")
           if not key:
               raise SystemExit("Missing ASI_ONE_API_KEY repository secret")
 
+          url = "https://www.reddit.com/r/TrueOffMyChest/top.json?t=day&limit=50"
           req = urllib.request.Request(
-              "https://www.reddit.com/r/TrueOffMyChest/.rss?sort=top&t=day",
-              headers={"User-Agent": "ContentFactory/1.0"}
+              url,
+              headers={"User-Agent": "Mozilla/5.0 ContentFactory/1.0"}
           )
-          with urllib.request.urlopen(req, timeout=30) as response:
-              root = ET.fromstring(response.read())
 
-          ns = {"atom": "http://www.w3.org/2005/Atom"}
+          try:
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  data = json.loads(response.read().decode("utf-8"))
+          except Exception as e:
+              raise SystemExit(f"Could not fetch Reddit posts: {e}")
+
           chosen = None
+          posts = data.get("data", {}).get("children", [])
 
-          for entry in root.findall("atom:entry", ns):
-              title = entry.findtext("atom:title", default="", namespaces=ns)
-              content = entry.findtext("atom:content", default="", namespaces=ns)
-              parser = TextExtractor()
-              parser.feed(unescape(content))
-              body = re.sub(r"\s+", " ", " ".join(parser.parts)).strip()
-              link = ""
-              for item in entry.findall("atom:link", ns):
-                  if item.attrib.get("rel") == "alternate":
-                      link = item.attrib.get("href", "")
-                      break
-              if len(body) > 200 and title and link:
-                  chosen = (title, body[:12000], link)
+          for item in posts:
+              post = item.get("data", {})
+              title = html.unescape(post.get("title", "")).strip()
+              story = html.unescape(post.get("selftext", "")).strip()
+              permalink = post.get("permalink", "")
+
+              story = re.sub(r"\s+", " ", story).strip()
+
+              if (
+                  len(story) > 200
+                  and title
+                  and permalink
+                  and not post.get("stickied", False)
+                  and not post.get("over_18", False)
+              ):
+                  chosen = (
+                      title,
+                      story[:12000],
+                      "https://www.reddit.com" + permalink
+                  )
                   break
 
           if not chosen:
-              raise SystemExit("No suitable Reddit story found")
+              raise SystemExit(
+                  f"No suitable text post found among {len(posts)} Reddit posts. "
+                  "Try another subreddit or check Reddit access."
+              )
 
-          title, story, url = chosen
+          title, story, post_url = chosen
+          print("Selected Reddit post:", title)
+          print("Source:", post_url)
 
           prompt = f"""
-          Write an engaging, original 60-90 second first-person narration
+          Create an engaging, original 60-90 second first-person narration
           inspired by this Reddit post. Do not copy it verbatim.
-          Include a natural narrator reaction or opinion at suitable moments.
-          Use a strong hook, clear progression, and an interesting ending.
-          General-audience language. Output only the narration, with no title
-          or production instructions.
+          Include natural narrator opinions and reactions at appropriate moments.
+          Start with a strong hook, keep the story coherent, and end memorably.
+          Keep it suitable for a general audience.
+          Output only the narration, without a title or instructions.
 
           Reddit title: {title}
           Original post: {story}
@@ -85,7 +94,7 @@ jobs:
           payload = json.dumps({
               "model": "asi1",
               "messages": [{"role": "user", "content": prompt}]
-          }).encode()
+          }).encode("utf-8")
 
           request = urllib.request.Request(
               "https://api.asi1.ai/v1/chat/completions",
@@ -111,11 +120,11 @@ jobs:
           with open("post_excerpt.txt", "w", encoding="utf-8") as f:
               f.write(story[:900])
           with open("post_url.txt", "w", encoding="utf-8") as f:
-              f.write(url)
+              f.write(post_url)
 
           print("Script generated. Words:", len(script.split()))
-          print("Source post:", url)
           PY
+
 
       - name: Generate Kokoro voiceover
         run: |
