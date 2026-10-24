@@ -95,15 +95,18 @@ jobs:
           print("Script generated. Words:", len(script.split()))
           PY
 
+     
       - name: Generate voiceover
         run: |
-          python -m edge_tts \
-            --voice en-US-GuyNeural \
-            --file script.txt \
-            --write-media narration.mp3
+          python -m kokoro \
+            --voice am_adam \
+            --language a \
+            --input-file script.txt \
+            --output-file narration.wav
 
-          test -s narration.mp3
-          echo "Voiceover generated."
+          test -s narration.wav
+          echo "Kokoro voiceover generated."
+
 
       - name: Render final video with subtitles
         run: |
