@@ -1,5 +1,5 @@
 
-name: Generate Reddit Script
+name: Generate Reddit Video
 
 on:
   workflow_dispatch:
@@ -10,9 +10,15 @@ permissions:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
 
     steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install edge-tts faster-whisper
+
       - name: Fetch Reddit story and generate script
         env:
           ASI_ONE_API_KEY: ${{ secrets.ASI_ONE_API_KEY }}
@@ -21,25 +27,22 @@ jobs:
           import os, json, re, urllib.request, xml.etree.ElementTree as ET
           from html import unescape
 
-          if not os.environ.get("ASI_ONE_API_KEY"):
+          key = os.environ.get("ASI_ONE_API_KEY")
+          if not key:
               raise SystemExit("Missing ASI_ONE_API_KEY repository secret")
 
-          feed_url = "https://www.reddit.com/r/TrueOffMyChest/.rss?sort=top&t=day"
           req = urllib.request.Request(
-              feed_url,
+              "https://www.reddit.com/r/TrueOffMyChest/.rss?sort=top&t=day",
               headers={"User-Agent": "ContentFactory/1.0"}
           )
 
-          with urllib.request.urlopen(req, timeout=20) as response:
+          with urllib.request.urlopen(req, timeout=30) as response:
               root = ET.fromstring(response.read())
 
           ns = {"atom": "http://www.w3.org/2005/Atom"}
           entries = root.findall("atom:entry", ns)
-
-          if not entries:
-              raise SystemExit("No Reddit posts found in the RSS feed")
-
           chosen = None
+
           for entry in entries:
               title = entry.findtext("atom:title", default="", namespaces=ns)
               content = entry.findtext("atom:content", default="", namespaces=ns)
@@ -50,37 +53,34 @@ jobs:
                   break
 
           if not chosen:
-              raise SystemExit("No suitable story found in today's feed")
+              raise SystemExit("No suitable Reddit story found")
 
           title, story = chosen
           prompt = f"""
-          Create an original 60-90 second first-person narration inspired by
-          the following Reddit post. Do not copy it verbatim or invent claims
-          that the source author definitely made. Make it engaging, coherent,
-          and suitable for a general audience. Output only the narration.
+          Write an original, engaging 60-90 second first-person narration
+          inspired by this Reddit post. Do not copy it verbatim. Keep it
+          coherent and suitable for a general audience. Output only the script.
 
-          Post title: {title}
-          Post content: {story}
+          Title: {title}
+          Post: {story}
           """
 
           payload = json.dumps({
               "model": "asi1",
-              "messages": [
-                  {"role": "user", "content": prompt}
-              ]
+              "messages": [{"role": "user", "content": prompt}]
           }).encode()
 
-          api_req = urllib.request.Request(
+          request = urllib.request.Request(
               "https://api.asi1.ai/v1/chat/completions",
               data=payload,
               headers={
-                  "Authorization": "Bearer " + os.environ["ASI_ONE_API_KEY"],
+                  "Authorization": "Bearer " + key,
                   "Content-Type": "application/json"
               },
               method="POST"
           )
 
-          with urllib.request.urlopen(api_req, timeout=90) as response:
+          with urllib.request.urlopen(request, timeout=120) as response:
               result = json.loads(response.read())
 
           script = result["choices"][0]["message"]["content"].strip()
@@ -90,61 +90,69 @@ jobs:
           with open("script.txt", "w", encoding="utf-8") as f:
               f.write(script + "\n")
 
-          print("Generated script successfully.")
-          print("Word count:", len(script.split()))
+          print("Script generated. Words:", len(script.split()))
           PY
-      
+
       - name: Generate voiceover
         run: |
-          pip install edge-tts
           python -m edge_tts \
             --voice en-US-GuyNeural \
             --file script.txt \
             --write-media narration.mp3
+
           test -s narration.mp3
-          echo "Voiceover generated successfully."
-      
-      
-       - name: Render final video with subtitles
-         run: |
-              sudo apt-get update
-              sudo apt-get install -y ffmpeg
-              pip install edge-tts faster-whisper
+          echo "Voiceover generated."
 
-              curl -L "https://github.com/blatantsurvivor-cpu/content-factory/releases/download/v1.0/minecraft_test_1080p.mp4" -o gameplay.mp4
+      - name: Render final video with subtitles
+        run: |
+          curl -fL --retry 3 \
+            "https://github.com/blatantsurvivor-cpu/content-factory/releases/download/v1.0/minecraft_test_1080p.mp4" \
+            -o gameplay.mp4
 
-              python - <<'PY'
-              from faster_whisper import WhisperModel
+          test -s gameplay.mp4
 
-              model = WhisperModel("tiny", device="cpu", compute_type="int8")
-              segments, _ = model.transcribe("narration.mp3")
+          python - <<'PY'
+          from faster_whisper import WhisperModel
 
-              def stamp(t):
-                  ms = round(t * 1000)
-                  h, ms = divmod(ms, 3600000)
-                  m, ms = divmod(ms, 60000)
-                  s, ms = divmod(ms, 1000)
-                  return f"{h:02}:{m:02}:{s:02},{ms:03}"
+          model = WhisperModel("tiny", device="cpu", compute_type="int8")
+          segments, _ = model.transcribe("narration.mp3")
 
-              with open("subtitles.srt", "w", encoding="utf-8") as f:
-                  for i, seg in enumerate(segments, 1):
-                      f.write(f"{i}\n{stamp(seg.start)} --> {stamp(seg.end)}\n{seg.text.strip()}\n\n")
-              PY
+          def stamp(seconds):
+              ms = round(seconds * 1000)
+              h, ms = divmod(ms, 3600000)
+              m, ms = divmod(ms, 60000)
+              s, ms = divmod(ms, 1000)
+              return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
-              ffmpeg -y -stream_loop -1 -i gameplay.mp4 -i narration.mp3 \
-                -map 0:v:0 -map 1:a:0 \
-                -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,subtitles=subtitles.srt:force_style='FontName=Arial,FontSize=18,Outline=2,Alignment=2,MarginV=180'" \
-                -c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p \
-                -c:a aac -b:a 192k -shortest -movflags +faststart \
-                final_video.mp4
+          count = 0
+          with open("subtitles.srt", "w", encoding="utf-8") as f:
+              for i, seg in enumerate(segments, 1):
+                  text = seg.text.strip()
+                  if text:
+                      f.write(
+                          f"{i}\n{stamp(seg.start)} --> {stamp(seg.end)}\n"
+                          f"{text}\n\n"
+                      )
+                      count += 1
 
-              test -s final_video.mp4
+          if count == 0:
+              raise SystemExit("Whisper generated no subtitles")
+          PY
 
+          ffmpeg -y -stream_loop -1 -i gameplay.mp4 -i narration.mp3 \
+            -map 0:v:0 -map 1:a:0 \
+            -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,subtitles=subtitles.srt:force_style='FontName=Arial,FontSize=22,Outline=2,Shadow=1,Alignment=2,MarginV=180'" \
+            -c:v libx264 -preset ultrafast -crf 23 \
+            -pix_fmt yuv420p -c:a aac -b:a 192k \
+            -shortest -movflags +faststart final_video.mp4
 
-      - name: Save generated script
+          test -s final_video.mp4
+          echo "Final video created successfully."
+
+      - name: Upload final video
         uses: actions/upload-artifact@v4
         with:
-          name: generated-script
-          path: |
-            final_video.mp4
+          name: final-video
+          path: final_video.mp4
+          if-no-files-found: error
           retention-days: 7
