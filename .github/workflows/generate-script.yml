@@ -93,10 +93,22 @@ jobs:
           print("Generated script successfully.")
           print("Word count:", len(script.split()))
           PY
+      
+      - name: Generate voiceover
+        run: |
+          pip install edge-tts
+          python -m edge_tts \
+            --voice en-US-GuyNeural \
+            --file script.txt \
+            --write-media narration.mp3
+          test -s narration.mp3
+          echo "Voiceover generated successfully."
 
       - name: Save generated script
         uses: actions/upload-artifact@v4
         with:
           name: generated-script
-          path: script.txt
+          path: |
+            script.txt
+            narration.mp3
           retention-days: 7
