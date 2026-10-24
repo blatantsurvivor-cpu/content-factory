@@ -122,6 +122,37 @@ jobs:
 
               test -s final_video.mp4
               echo "Video rendered successfully."
+      
+       - name: Generate and burn subtitles
+         run: |
+              pip install faster-whisper
+
+              python - <<'PY'
+              from faster_whisper import WhisperModel
+
+              model = WhisperModel("tiny", device="cpu", compute_type="int8")
+              segments, info = model.transcribe("narration.mp3")
+
+              def stamp(t):
+                  ms = round(t * 1000)
+                  h, ms = divmod(ms, 3600000)
+                  m, ms = divmod(ms, 60000)
+                  s, ms = divmod(ms, 1000)
+                  return f"{h:02}:{m:02}:{s:02},{ms:03}"
+
+              with open("subtitles.srt", "w", encoding="utf-8") as f:
+                  for i, seg in enumerate(segments, 1):
+                      f.write(f"{i}\n{stamp(seg.start)} --> {stamp(seg.end)}\n{seg.text.strip()}\n\n")
+              PY
+
+              ffmpeg -y -i final_video.mp4 \
+                -vf "subtitles=subtitles.srt:force_style='FontName=Arial,FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Alignment=2,MarginV=180'" \
+                -c:v libx264 -preset ultrafast -crf 23 \
+                -c:a copy -movflags +faststart \
+                subtitled_video.mp4
+
+              test -s subtitled_video.mp4
+              echo "Subtitled video created."
 
       - name: Save generated script
         uses: actions/upload-artifact@v4
