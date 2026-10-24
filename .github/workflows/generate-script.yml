@@ -26,66 +26,77 @@ jobs:
           ASI_ONE_API_KEY: ${{ secrets.ASI_ONE_API_KEY }}
         run: |
           python - <<'PY'
-          import os, json, re, urllib.request, html
+          import os, json, re, urllib.request
+          from urllib.parse import urlencode
+          from html import unescape
 
           key = os.environ.get("ASI_ONE_API_KEY")
           if not key:
-              raise SystemExit("Missing ASI_ONE_API_KEY repository secret")
+              raise SystemExit("Missing ASI_ONE_API_KEY secret")
 
-          url = "https://www.reddit.com/r/TrueOffMyChest/top.json?t=day&limit=50"
+          params = urlencode({
+              "subreddit": "TrueOffMyChest",
+              "size": 50,
+              "sort": "desc",
+              "sort_type": "score"
+          })
+          url = "https://api.pullpush.io/reddit/search/submission/?" + params
+
           req = urllib.request.Request(
               url,
-              headers={"User-Agent": "Mozilla/5.0 ContentFactory/1.0"}
+              headers={"User-Agent": "ContentFactory/1.0"}
           )
 
           try:
-              with urllib.request.urlopen(req, timeout=30) as response:
+              with urllib.request.urlopen(req, timeout=45) as response:
                   data = json.loads(response.read().decode("utf-8"))
           except Exception as e:
-              raise SystemExit(f"Could not fetch Reddit posts: {e}")
+              raise SystemExit(
+                  f"PullPush could not fetch Reddit posts: {e}. "
+                  "The archive may be unavailable or rate-limited."
+              )
 
           chosen = None
-          posts = data.get("data", {}).get("children", [])
 
-          for item in posts:
-              post = item.get("data", {})
-              title = html.unescape(post.get("title", "")).strip()
-              story = html.unescape(post.get("selftext", "")).strip()
-              permalink = post.get("permalink", "")
+          for post in data.get("data", []):
+              title = unescape(post.get("title", "")).strip()
+              story = unescape(post.get("selftext", "")).strip()
+              story = re.sub(r"\s+", " ", story)
 
-              story = re.sub(r"\s+", " ", story).strip()
+              post_id = post.get("id", "")
+              subreddit = post.get("subreddit", "TrueOffMyChest")
 
               if (
                   len(story) > 200
                   and title
-                  and permalink
-                  and not post.get("stickied", False)
+                  and post_id
                   and not post.get("over_18", False)
+                  and not post.get("stickied", False)
               ):
-                  chosen = (
-                      title,
-                      story[:12000],
-                      "https://www.reddit.com" + permalink
+                  post_url = (
+                      "https://www.reddit.com/r/"
+                      + subreddit + "/comments/" + post_id + "/"
                   )
+                  chosen = (title, story[:12000], post_url)
                   break
 
           if not chosen:
               raise SystemExit(
-                  f"No suitable text post found among {len(posts)} Reddit posts. "
-                  "Try another subreddit or check Reddit access."
+                  "PullPush returned no suitable text stories. "
+                  "Try another subreddit or rerun later."
               )
 
           title, story, post_url = chosen
-          print("Selected Reddit post:", title)
+          print("Selected:", title)
           print("Source:", post_url)
 
           prompt = f"""
-          Create an engaging, original 60-90 second first-person narration
-          inspired by this Reddit post. Do not copy it verbatim.
-          Include natural narrator opinions and reactions at appropriate moments.
-          Start with a strong hook, keep the story coherent, and end memorably.
-          Keep it suitable for a general audience.
-          Output only the narration, without a title or instructions.
+          Create an engaging, original 60-90 second narration inspired by
+          this Reddit post. Do not copy it verbatim.
+          Include natural narrator opinions and reactions throughout.
+          Start with a strong hook, maintain a coherent story, and end
+          memorably. Keep it suitable for a general audience.
+          Output only the narration, with no title or instructions.
 
           Reddit title: {title}
           Original post: {story}
@@ -124,8 +135,6 @@ jobs:
 
           print("Script generated. Words:", len(script.split()))
           PY
-
-
       - name: Generate Kokoro voiceover
         run: |
           python -m kokoro \
