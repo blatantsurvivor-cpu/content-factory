@@ -13,12 +13,14 @@ jobs:
     timeout-minutes: 20
 
     steps:
+      
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg espeak-ng
           python -m pip install --upgrade pip
-          python -m pip install --upgrade "av>=14,<16" "faster-whisper==1.1.1" edge-tts
+          python -m pip install --upgrade "av>=14,<16" "faster-whisper==1.1.1" "kokoro>=0.9.4" soundfile
+
       - name: Fetch Reddit story and generate script
         env:
           ASI_ONE_API_KEY: ${{ secrets.ASI_ONE_API_KEY }}
