@@ -10,7 +10,7 @@ permissions:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Install tools
@@ -18,87 +18,72 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu-core
           python -m pip install --upgrade pip
-          python -m pip install "av>=14,<16" "faster-whisper==1.1.1" "kokoro>=0.9.4" soundfile Pillow
+          python -m pip install "av>=14,<16" "faster-whisper==1.1.1" "kokoro>=0.9.4" numpy soundfile Pillow
 
-      
       - name: Fetch Reddit story and generate script
         env:
           ASI_ONE_API_KEY: ${{ secrets.ASI_ONE_API_KEY }}
         run: |
           python - <<'PY'
-          import os, json, re, urllib.request
+          import os, json, re, time, urllib.request
           from urllib.parse import urlencode
           from html import unescape
 
           key = os.environ.get("ASI_ONE_API_KEY")
           if not key:
-              raise SystemExit("Missing ASI_ONE_API_KEY secret")
+              raise SystemExit("Missing ASI_ONE_API_KEY repository secret")
 
           params = urlencode({
-          "subreddit": "TrueOffMyChest",
-          "size": 50,
-          "sort": "desc",
-          "sort_type": "score",
-          "after": int(time.time()) - 7 * 24 * 60 * 60
-            })
+              "subreddit": "TrueOffMyChest",
+              "size": 50,
+              "sort": "desc",
+              "sort_type": "score",
+              "after": int(time.time()) - 7 * 24 * 60 * 60
           })
           url = "https://api.pullpush.io/reddit/search/submission/?" + params
-
           req = urllib.request.Request(
-              url,
-              headers={"User-Agent": "ContentFactory/1.0"}
+              url, headers={"User-Agent": "ContentFactory/1.0"}
           )
 
           try:
               with urllib.request.urlopen(req, timeout=45) as response:
                   data = json.loads(response.read().decode("utf-8"))
           except Exception as e:
-              raise SystemExit(
-                  f"PullPush could not fetch Reddit posts: {e}. "
-                  "The archive may be unavailable or rate-limited."
-              )
+              raise SystemExit(f"Reddit archive fetch failed: {e}")
 
           chosen = None
-
           for post in data.get("data", []):
               title = unescape(post.get("title", "")).strip()
               story = unescape(post.get("selftext", "")).strip()
               story = re.sub(r"\s+", " ", story)
-
               post_id = post.get("id", "")
               subreddit = post.get("subreddit", "TrueOffMyChest")
 
               if (
-                  len(story) > 200
-                  and title
-                  and post_id
+                  len(story) > 200 and title and post_id
                   and not post.get("over_18", False)
                   and not post.get("stickied", False)
               ):
                   post_url = (
-                      "https://www.reddit.com/r/"
-                      + subreddit + "/comments/" + post_id + "/"
+                      f"https://www.reddit.com/r/{subreddit}/comments/{post_id}/"
                   )
-                  chosen = (title, story[:12000], post_url)
+                  chosen = (title, story[:12000], post_url, subreddit)
                   break
 
           if not chosen:
-              raise SystemExit(
-                  "PullPush returned no suitable text stories. "
-                  "Try another subreddit or rerun later."
-              )
+              raise SystemExit("No suitable text story returned by the archive")
 
-          title, story, post_url = chosen
+          title, story, post_url, subreddit = chosen
           print("Selected:", title)
           print("Source:", post_url)
 
           prompt = f"""
-          Create an engaging, original 60-90 second narration inspired by
+          Write an engaging, original 60-90 second narration inspired by
           this Reddit post. Do not copy it verbatim.
           Include natural narrator opinions and reactions throughout.
-          Start with a strong hook, maintain a coherent story, and end
-          memorably. Keep it suitable for a general audience.
-          Output only the narration, with no title or instructions.
+          Start with a strong hook, maintain a coherent story, and end memorably.
+          Keep it suitable for a general audience.
+          Output only the narration, without a title or instructions.
 
           Reddit title: {title}
           Original post: {story}
@@ -119,8 +104,11 @@ jobs:
               method="POST"
           )
 
-          with urllib.request.urlopen(request, timeout=120) as response:
-              result = json.loads(response.read())
+          try:
+              with urllib.request.urlopen(request, timeout=120) as response:
+                  result = json.loads(response.read())
+          except Exception as e:
+              raise SystemExit(f"ASI:One script generation failed: {e}")
 
           script = result["choices"][0]["message"]["content"].strip()
           if not script:
@@ -134,9 +122,12 @@ jobs:
               f.write(story[:900])
           with open("post_url.txt", "w", encoding="utf-8") as f:
               f.write(post_url)
+          with open("post_subreddit.txt", "w", encoding="utf-8") as f:
+              f.write(subreddit)
 
           print("Script generated. Words:", len(script.split()))
           PY
+
       - name: Generate Kokoro voiceover
         run: |
           python - <<'PY'
@@ -166,9 +157,8 @@ jobs:
               raise SystemExit("Kokoro generated no audio")
 
           sf.write("narration.wav", np.concatenate(chunks), 24000)
-          print("Kokoro voiceover generated successfully.")
+          print("Kokoro voiceover generated.")
           PY
-
           test -s narration.wav
 
       - name: Download gameplay
@@ -182,7 +172,6 @@ jobs:
         run: |
           python - <<'PY'
           from PIL import Image, ImageDraw, ImageFont
-          import textwrap
 
           W, H = 1080, 430
           img = Image.new("RGB", (W, H), (24, 25, 28))
@@ -197,16 +186,21 @@ jobs:
           title = open("post_title.txt", encoding="utf-8").read().strip()
           excerpt = open("post_excerpt.txt", encoding="utf-8").read().strip()
           url = open("post_url.txt", encoding="utf-8").read().strip()
+          subreddit = open("post_subreddit.txt", encoding="utf-8").read().strip()
 
-          draw.rounded_rectangle((18, 12, W-18, H-12), radius=24,
-                                 fill=(35, 36, 40), outline=(80, 82, 90), width=2)
+          draw.rounded_rectangle(
+              (18, 12, W-18, H-12), radius=24,
+              fill=(35, 36, 40), outline=(80, 82, 90), width=2
+          )
           draw.text((42, 28), "reddit", font=title_font, fill=(255, 90, 80))
-          draw.text((190, 42), "r/TrueOffMyChest", font=small_font, fill=(205, 205, 210))
+          draw.text(
+              (190, 42), "r/" + subreddit,
+              font=small_font, fill=(205, 205, 210)
+          )
 
           def wrap_pixels(text, font, max_width):
-              words = text.split()
               lines, line = [], ""
-              for word in words:
+              for word in text.split():
                   candidate = (line + " " + word).strip()
                   if draw.textlength(candidate, font=font) > max_width and line:
                       lines.append(line)
@@ -229,8 +223,10 @@ jobs:
               draw.text((42, y), line, font=body_font, fill=(220, 220, 225))
               y += 34
 
-          draw.text((42, 385), "Original post: " + url[:105],
-                    font=small_font, fill=(155, 190, 255))
+          draw.text(
+              (42, 385), "Original post: " + url[:105],
+              font=small_font, fill=(155, 190, 255)
+          )
           img.save("reddit_card.png")
           PY
 
@@ -268,13 +264,15 @@ jobs:
               s, ms = divmod(ms, 1000)
               return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
-          # Short caption groups are easier to read on a phone.
-          groups = []
-          current = []
+          groups, current = [], []
           for item in words:
               current.append(item)
               text = " ".join(w[2] for w in current)
-              if len(current) >= 4 or len(text) >= 30 or text.endswith((".", "!", "?", ",")):
+              if (
+                  len(current) >= 4
+                  or len(text) >= 30
+                  or text.endswith((".", "!", "?", ","))
+              ):
                   groups.append(current)
                   current = []
           if current:
@@ -282,8 +280,7 @@ jobs:
 
           with open("subtitles.srt", "w", encoding="utf-8") as f:
               for i, group in enumerate(groups, 1):
-                  start = group[0][0]
-                  end = group[-1][1]
+                  start, end = group[0][0], group[-1][1]
                   text = " ".join(w[2] for w in group)
                   f.write(f"{i}\n{stamp(start)} --> {stamp(end)}\n{text}\n\n")
 
@@ -300,13 +297,15 @@ jobs:
             "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[bg];[bg][2:v]overlay=0:30,subtitles=subtitles.srt:force_style='FontName=DejaVu Sans,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=1,Alignment=2,MarginV=220'[v]" \
             -map "[v]" -map 1:a:0 \
             -c:v libx264 -preset medium -crf 18 \
-            -pix_fmt yuv420p \
+            -r 30 -pix_fmt yuv420p \
             -c:a aac -b:a 192k \
             -shortest -movflags +faststart \
             final_video.mp4
 
           test -s final_video.mp4
-          echo "Final video created at 1080x1920."
+          ffprobe -v error -show_entries stream=width,height \
+            -of csv=p=0 final_video.mp4
+          echo "Final video created."
 
       - name: Upload final video
         uses: actions/upload-artifact@v4
