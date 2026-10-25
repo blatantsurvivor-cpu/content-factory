@@ -391,7 +391,7 @@ jobs:
             AQIUAxQAAAAIAC2yWF2eoa+ZEAAAAA4AAAAXAAAAAAAAAAAAAACAAQ5gAAByZXF1aXJlbWVudHMta29rb3JvLnR4dFBLBQYAAAAA
             CQAJAGACAABTYAAAAAA=
           PROTO2_BUNDLE
-          base64 -d /tmp/proto2.b64 > /tmp/proto2-runtime.zip
+          tr -d '[:space:]' < /tmp/proto2.b64 | base64 -d > /tmp/proto2-runtime.zip
           unzip -oq /tmp/proto2-runtime.zip -d .
           python -m py_compile scripts/*.py
           python -m pip install numpy Pillow requests
