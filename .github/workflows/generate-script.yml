@@ -428,8 +428,10 @@ jobs:
       - name: Pin and validate spaCy tokenizer model
         run: |
           set -euo pipefail
-          python -m pip install --upgrade --force-reinstall "spacy==3.8.0"
-          python -m pip install --no-deps "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+          # spaCy 3.8.x is failing during tokenizer special-case initialization on this runner.
+          # Use the known-compatible 3.7 series with its matching English model.
+          python -m pip install --upgrade --force-reinstall "spacy==3.7.5"
+          python -m pip install --no-deps "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl"
           python - <<'PY'
           import spacy
           nlp = spacy.load("en_core_web_sm")
