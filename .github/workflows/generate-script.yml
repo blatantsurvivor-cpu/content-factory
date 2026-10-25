@@ -440,7 +440,7 @@ jobs:
       - name: Pin and validate spaCy tokenizer model
         run: |
           set -euo pipefail
-          python -m pip install --upgrade "spacy==3.8.7"
+          python -m pip install --upgrade --force-reinstall "spacy==3.8.0"
           python -m pip install --no-deps "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
           python - <<'PY'
           import spacy
