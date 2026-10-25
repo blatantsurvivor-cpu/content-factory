@@ -428,14 +428,15 @@ jobs:
       - name: Pin and validate spaCy tokenizer model
         run: |
           set -euo pipefail
-          # spaCy 3.8.x is failing during tokenizer special-case initialization on this runner.
-          # Use the known-compatible 3.7 series with its matching English model.
-          python -m pip install --upgrade --force-reinstall "spacy==3.7.5"
+          python -m pip install --upgrade --force-reinstall \
+            "numpy<2" "cymem==2.0.8" "preshed==3.0.9" "murmurhash==1.0.10" \
+            "thinc==8.2.5" "spacy==3.7.5"
           python -m pip install --no-deps "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl"
+          python -m pip list | grep -Ei '^(numpy|spacy|thinc|cymem|preshed|murmurhash|blis|srsly|en[-_]core[-_]web[-_]sm) '
           python - <<'PY'
           import spacy
           nlp = spacy.load("en_core_web_sm")
-          print(f"spaCy {spacy.__version__}; model loaded; tokenizer smoke test: {len(nlp('This is a tokenizer test.'))} tokens")
+          print(f"spaCy {spacy.__version__}; tokens: {len(nlp('This is a tokenizer test.'))}")
           PY
 
       - name: Generate expressive narration
