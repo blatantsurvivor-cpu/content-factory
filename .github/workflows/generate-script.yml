@@ -437,6 +437,17 @@ jobs:
           TTS_WORKERS: "3"
         run: python scripts/voice.py
 
+      - name: Pin and validate spaCy tokenizer model
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade "spacy==3.8.7"
+          python -m pip install --no-deps "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+          python - <<'PY'
+          import spacy
+          nlp = spacy.load("en_core_web_sm")
+          print(f"spaCy {spacy.__version__}; model loaded; tokenizer smoke test: {len(nlp('This is a tokenizer test.'))} tokens")
+          PY
+
       - name: Build word-synced captions
         env:
           OMP_NUM_THREADS: "4"
